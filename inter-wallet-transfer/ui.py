@@ -440,7 +440,6 @@ class Transfer(MessageBoxMixin, PrintError, QWidget):
         self.wallet.add_input_info(coin)
         inputs = [coin]
         recipient_address = self.recipient_wallet and self.recipient_wallet.get_unused_address(frozen_ok=False)
-        self.print_error("recipient_address: ", recipient_address)
         if not recipient_address:
             self.print_error("Could not get recipient_address; recipient wallet may have been cleaned up, "
                              "aborting send_tx")
@@ -508,7 +507,6 @@ class Transfer(MessageBoxMixin, PrintError, QWidget):
             self.print_error("Resulting output value is below dust threshold, aborting send_tx")
             return _("Too small")
         # create the tx again, this time with the real fee
-        #split = random.uniform(0, 1)
         amount1 = round((coin['value']-fee)*split)
         amount2 = round((coin['value']-fee)*(1-split))
         outputs = [(recipient_addresses[0].kind, recipient_addresses[0], amount1), (recipient_addresses[1].kind, recipient_addresses[1], amount2)]
