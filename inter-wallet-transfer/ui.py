@@ -30,7 +30,7 @@ def _get_name(utxo) -> str:
 
 class LoadRWallet(MessageBoxMixin, PrintError, QWidget):
 
-    def __init__(self, parent: ElectrumWindow, plugin, wallet_name, recipient_wallet=None, time=None, password=None):
+    def __init__(self, parent: ElectrumWindow, plugin, wallet_name, recipient_wallet=None, time=None, oneToTwo=None, password=None):
         QWidget.__init__(self, parent)
         assert isinstance(parent, ElectrumWindow)
         self.password = password
@@ -56,11 +56,16 @@ class LoadRWallet(MessageBoxMixin, PrintError, QWidget):
         vbox = QVBoxLayout()
         self.setLayout(vbox)
         self.local_xpub = self.wallet.get_master_public_keys()
+        self.oneToTwo = QCheckBox("Use 1-to-2 transactions (doubles number of coins in resulting wallet)")
+        self.oneToTwo.setChecked(False)
+        #self.oneToTwo.setEnabled(False)
+        #self.oneToTwo.stateChanged.connect(lambda:self.btnstate(self.oneToTwo))
         l = QLabel(_("Master Public Key") + _(" of this wallet (used to generate all of your addresses): "))
         l2 = QLabel((self.local_xpub and self.local_xpub[0])
                     or _("This wallet is <b>non-deterministic</b> and cannot be used as a transfer destination."))
         vbox.addWidget(l)
         vbox.addWidget(l2)
+        vbox.addWidget(self.oneToTwo)
         l2.setTextInteractionFlags(Qt.TextSelectableByMouse)
         l = QLabel(_("Master Public Key") + " of the wallet you want to transfer your funds to:")
         disabled = False
@@ -152,7 +157,7 @@ class LoadRWallet(MessageBoxMixin, PrintError, QWidget):
         # on the recepient_wallet object's destruction (when refct drops to 0)
         Weak.finalize(self.recipient_wallet, self.delete_temp_wallet_file, self.file)
         self.plugin.switch_to(Transfer, self.wallet_name, self.recipient_wallet, float(self.time_e.text()),
-                              self.password)
+                              self.oneToTwo.isChecked(), self.password)
 
     def transfer_changed(self):
         try:
@@ -287,7 +292,7 @@ class Transfer(MessageBoxMixin, PrintError, QWidget):
     done_signal = pyqtSignal(str)
     set_label_signal = pyqtSignal(str, str)
 
-    def __init__(self, parent, plugin, wallet_name, recipient_wallet, hours, password):
+    def __init__(self, parent, plugin, wallet_name, recipient_wallet, hours, oneToTwo, password):
         QWidget.__init__(self, parent)
         self.wallet_name = wallet_name
         self.plugin = plugin
@@ -295,6 +300,7 @@ class Transfer(MessageBoxMixin, PrintError, QWidget):
         self.main_window = parent
         self.wallet = parent.wallet
         self.recipient_wallet = recipient_wallet
+        self.oneToTwo = oneToTwo
 
         cancel = False
 
@@ -379,14 +385,17 @@ class Transfer(MessageBoxMixin, PrintError, QWidget):
             name = _get_name(coin)
             self.tu.sending = name
             self.tu.update_sig.emit()  # have the widget immediately display "Processing"
-            while not self.recipient_wallet.is_up_to_date():
+            while not self.recipient_wallet.is_fully_settled_down():
                 ''' We must wait for the recipient wallet to finish synching...
                 Ugly hack.. :/ '''
                 self.print_error("Receiving wallet is not yet up-to-date... waiting... ")
                 if not wait(5.0):
                     # abort signalled
                     return
-            err = self.send_tx(coin)
+            if self.oneToTwo:
+                err = self.send_tx2(coin)
+            else:
+                err = self.send_tx(coin)
             if not err:
                 self.tu.sent_utxos[name] = time.time()
                 ct += 1
@@ -419,7 +428,7 @@ class Transfer(MessageBoxMixin, PrintError, QWidget):
     def switch_signal_slot(self):
         """Runs in GUI (main) thread"""
         self.clean_up()
-        self.plugin.switch_to(LoadRWallet, self.wallet_name, None, None, None)
+        self.plugin.switch_to(LoadRWallet, self.wallet_name, None, None, None, None)
 
     def done_slot(self, msg):
         self.abort_but.setText(_("Back"))
@@ -430,7 +439,7 @@ class Transfer(MessageBoxMixin, PrintError, QWidget):
         on success."""
         self.wallet.add_input_info(coin)
         inputs = [coin]
-        recipient_address = self.recipient_wallet and self.recipient_wallet.get_unused_address()
+        recipient_address = self.recipient_wallet and self.recipient_wallet.get_unused_address(frozen_ok=False)
         if not recipient_address:
             self.print_error("Could not get recipient_address; recipient wallet may have been cleaned up, "
                              "aborting send_tx")
@@ -449,13 +458,14 @@ class Transfer(MessageBoxMixin, PrintError, QWidget):
         # create the tx again, this time with the real fee
         outputs = [(recipient_address.kind, recipient_address, coin['value'] - fee)]
         tx = Transaction.from_io(inputs, outputs, locktime=self.wallet.get_local_height(), **kwargs)
+        tx.BIP_LI01_sort()
         try:
             self.wallet.sign_transaction(tx, self.password)
         except InvalidPassword as e:
             return str(e)
         except Exception:
             return _("Unspecified failure")
-
+        
         self.set_label_signal.emit(tx.txid(),
             _("Inter-Wallet Transfer {amount} -> {address}").format(
                 amount=self.main_window.format_amount(coin['value']) + " " + self.main_window.base_unit(),
@@ -466,6 +476,69 @@ class Transfer(MessageBoxMixin, PrintError, QWidget):
         except Exception as e:
             self.print_error("Error broadcasting tx:", repr(e))
             return (e.args and e.args[0]) or _("Unspecified failure")
+        self.recipient_wallet.frozen_addresses.add(recipient_address)
+        self.recipient_wallet.create_new_address(False)
+        return None
+
+    def send_tx2(self, coin: dict) -> str:
+        """Returns the failure reason as a string on failure, or 'None'
+        on success."""
+        self.wallet.add_input_info(coin)
+        inputs = [coin]
+        recipient_addresses = self.recipient_wallet and self.recipient_wallet.get_unused_addresses(frozen_ok=False)[:2]
+        if not recipient_addresses or not recipient_addresses[0] or not recipient_addresses[1]:
+            self.print_error("Could not get recipient_address; recipient wallet may have been cleaned up, "
+                     "aborting send_tx")
+            return _("Unspecified failure")
+        split = random.uniform(0.05, 0.95) #no extreme values to avoid making dusty coins
+        amount1 = round(coin['value']*split)
+        amount2 = round(coin['value']*(1-split))
+        outputs = [(recipient_addresses[0].kind, recipient_addresses[0], amount1), (recipient_addresses[1].kind, recipient_addresses[1], amount2)]
+        kwargs = {}
+        print_error("outputs: "+str(outputs))
+        if hasattr(self.wallet, 'is_schnorr_enabled'):
+            # This EC version has Schnorr, query the flag
+            kwargs['sign_schnorr'] = self.wallet.is_schnorr_enabled()
+        # create the tx once to get a fee from the size
+        tx = Transaction.from_io(inputs, outputs, locktime=self.wallet.get_local_height(), **kwargs)
+        print_error("tx: "+str(tx))
+        fee = tx.estimated_size()
+        if amount1 < self.wallet.dust_threshold() or amount2 < self.wallet.dust_threshold():
+            self.print_error("Resulting output value is below dust threshold, aborting send_tx")
+            return _("Too small")
+        # create the tx again, this time with the real fee
+        #split = random.uniform(0, 1)
+        amount1 = round((coin['value']-fee)*split)
+        amount2 = round((coin['value']-fee)*(1-split))
+        outputs = [(recipient_addresses[0].kind, recipient_addresses[0], amount1), (recipient_addresses[1].kind, recipient_addresses[1], amount2)]
+        tx = Transaction.from_io(inputs, outputs, locktime=self.wallet.get_local_height(), **kwargs)
+        tx.BIP_LI01_sort()
+        try:
+            self.wallet.sign_transaction(tx, self.password)
+        except InvalidPassword as e:
+            return str(e)
+        except Exception:
+            return _("Unspecified failure")
+        
+        self.set_label_signal.emit(tx.txid(),
+        _("Inter-Wallet Transfer {amount} -> {address}").format(
+            amount=self.main_window.format_amount(amount1) + " " + self.main_window.base_unit(),
+            address=recipient_addresses[0].to_ui_string()
+        ))
+        self.set_label_signal.emit(tx.txid(),
+            _("Inter-Wallet Transfer {amount} -> {address}").format(
+                amount=self.main_window.format_amount(amount2) + " " + self.main_window.base_unit(),
+                address=recipient_addresses[1].to_ui_string()
+        ))       
+        try:
+            self.main_window.network.broadcast_transaction2(tx)
+        except Exception as e:
+            self.print_error("Error broadcasting tx:", repr(e))
+            return (e.args and e.args[0]) or _("Unspecified failure")
+        self.recipient_wallet.frozen_addresses.add(recipient_addresses[0])
+        self.recipient_wallet.frozen_addresses.add(recipient_addresses[1])
+        self.recipient_wallet.create_new_address(False)            
+        self.recipient_wallet.create_new_address(False)
         return None
 
     def set_label_slot(self, txid: str, label: str):

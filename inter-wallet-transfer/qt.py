@@ -119,10 +119,10 @@ class Plugin(BasePlugin):
         if wallet_tab:
             wallet_tab.update()
 
-    def switch_to(self, mode, wallet_name, recipient_wallet, time, password):
+    def switch_to(self, mode, wallet_name, recipient_wallet, time, oneToTwo, password):
         window=self.wallet_windows[wallet_name]
         try:
-            l = mode(window, self, wallet_name, recipient_wallet,time, password=password)
+            l = mode(window, self, wallet_name, recipient_wallet, time, oneToTwo, password=password)
 
             tab = window.create_list_tab(l)
             destroyed_print_error(tab)  # track object lifecycle
