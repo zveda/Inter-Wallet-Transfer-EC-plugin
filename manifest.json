@@ -1,9 +1,9 @@
 {
     "display_name": "Inter-Wallet Transfer",
-    "version": "1.5",
-    "description": "A plugin, that sends your coins to another wallet one by one, every time to a fresh address.",
-    "project_url": "https://github.com/KarolTrzeszczkowski/Inter-Wallet-Transfer-EC-plugin/",
-    "minimum_ec_version": "4.0",
+    "version": "1.6",
+    "description": "A plugin, that sends your coins to another wallet one by one, every time to a fresh address. Also has the option to split each coin into two outputs to better match normal wallet behavior and preserve privacy.",
+    "project_url": "https://github.com/zveda/Inter-Wallet-Transfer-EC-plugin/",
+    "minimum_ec_version": "4.4.2",
     "package_name": "inter-wallet-transfer",
     "available_for": [
         "qt"

@@ -458,7 +458,7 @@ class Transfer(MessageBoxMixin, PrintError, QWidget):
         # create the tx again, this time with the real fee
         outputs = [(recipient_address.kind, recipient_address, coin['value'] - fee)]
         tx = Transaction.from_io(inputs, outputs, locktime=self.wallet.get_local_height(), **kwargs)
-        tx.BIP_LI01_sort()
+        tx.BIP69_sort()
         try:
             self.wallet.sign_transaction(tx, self.password)
         except InvalidPassword as e:
@@ -511,7 +511,7 @@ class Transfer(MessageBoxMixin, PrintError, QWidget):
         amount2 = round((coin['value']-fee)*(1-split))
         outputs = [(recipient_addresses[0].kind, recipient_addresses[0], amount1), (recipient_addresses[1].kind, recipient_addresses[1], amount2)]
         tx = Transaction.from_io(inputs, outputs, locktime=self.wallet.get_local_height(), **kwargs)
-        tx.BIP_LI01_sort()
+        tx.BIP69_sort()
         try:
             self.wallet.sign_transaction(tx, self.password)
         except InvalidPassword as e:
